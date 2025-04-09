@@ -5,7 +5,7 @@ import json
 import os
 import polars as pl
 import shutil
-from sqlalchemy import create_engine,  String, Float, text
+from sqlalchemy import create_engine, String, Float, text
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.declarative import declarative_base
@@ -34,6 +34,7 @@ StockTableType = TypeVar('StockTableType')
 
 Base = declarative_base()
 
+
 def build_OptionTable(table_name):
     class OptionTable(Base):
         __tablename__ = table_name
@@ -54,7 +55,8 @@ def build_OptionTable(table_name):
     
     return OptionTable
 
-def build_StockTable(table_name):
+
+def build_StockTable(table_name: str) -> StockTableType:
     class StockTable(Base):
         __tablename__ = table_name
 
@@ -76,12 +78,14 @@ class OptionData:
     identifier: str
     data: list[OptionTableType]
 
+
 @dataclass
 class StockData:
     identifier: str
     data: list[StockTableType]
 
-def get_option_data(connection_string, database_name, table_name):
+
+def get_option_data(connection_string: str, database_name: str, table_name: str) -> OptionData:
 
     connection_string += database_name
     engine = create_engine(connection_string)
@@ -91,10 +95,12 @@ def get_option_data(connection_string, database_name, table_name):
         OptionQuery = build_OptionTable(table_name)
         data = session.query(OptionQuery).all()
 
-    od = OptionData(identifier=table_name, data=data)
+    od: OptionData = OptionData(identifier=table_name, data=data)
     return od
 
-def get_stock_data(connection_string, database_name, table_name):        
+
+def get_stock_data(connection_string: str, database_name: str, table_name: str) -> StockData:
+
     connection_string += database_name
     engine = create_engine(connection_string)
     #Base.metadata.create_all(engine)
@@ -102,10 +108,11 @@ def get_stock_data(connection_string, database_name, table_name):
         StockQuery = build_StockTable(table_name)
         data = session.query(StockQuery).all()
 
-    sd = StockData(identifier=table_name, data=data)
+    sd: StockData = StockData(identifier=table_name, data=data)
     return sd
+
     
-def get_database_names(connection_string):
+def get_database_names(connection_string: str) -> dict[str, list[None]]:
 
     connection_string += 'master'
     engine = create_engine(connection_string)
@@ -121,7 +128,8 @@ def get_database_names(connection_string):
     
     return sql_server
 
-def get_table_names(connection_string, sql_server):
+
+def get_table_names(connection_string: str, sql_server: str) -> dict[str, list[str]]:
     
     for database in sql_server.keys():
         tmp_con_str = connection_string + database
@@ -134,7 +142,8 @@ def get_table_names(connection_string, sql_server):
     
     return sql_server
 
-def filter_option_tables(sql_server):
+
+def filter_option_tables(sql_server: str) -> (dict[str, list[str]], dict[str, list[str]]):
 
     tmp_sql_server_stk, tmp_sql_server_opt = defaultdict(list), defaultdict(list)
     if DataCreationConfig.HISTORY_ONLY:
@@ -154,7 +163,8 @@ def filter_option_tables(sql_server):
     
     return tmp_sql_server_stk, tmp_sql_server_opt
 
-def load_credentials():
+
+def load_sql_credentials() -> str:
     credentials_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.SQL_CREDENTIALS_JSON_PATH)
 
     with open(credentials_path, 'r') as file:
@@ -166,7 +176,8 @@ def load_credentials():
 
     return conn_str
 
-def process_stock_data(conn_str, sql_server_stk):
+
+def process_stock_data(conn_str: str, sql_server_stk: dict[str, list[str]]):
     stk_dfs = {}
 
     database = 'Data_STK'
@@ -178,7 +189,7 @@ def process_stock_data(conn_str, sql_server_stk):
         try:
             data = get_stock_data(conn_str, database, table)
         except InvalidRequestError as e:
-            print(f'Invalid request error: {e}')
+            tprint(f'Invalid request error: {e}')
             continue
     
         if not data.data:
@@ -188,9 +199,10 @@ def process_stock_data(conn_str, sql_server_stk):
 
         stk_dfs[table.split('_')[0]] = stk_df
 
-    return stk_dfs            
+    return stk_dfs
 
-def safe_df_dumps(data_export_path, option_dfs, database):
+
+def safe_df_dumps(data_export_path: str, option_dfs: dict[str, pl.DataFrame], database: str) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         arrow_files = []
 
@@ -222,27 +234,30 @@ def safe_df_dumps(data_export_path, option_dfs, database):
                     *arrow_files
                 ]
                 subprocess.run(command, check=True, cwd=tmpdir)
-                print(f'Successfully compressed {len(option_dfs)} DataFrames to {output_path}')
+                tprint(f'Successfully compressed {len(option_dfs)} DataFrames to {output_path}')
 
             except subprocess.CalledProcessError as e:
-                print(f'Error during tar execution: {e}')
+                tprint(f'Error during tar execution: {e}')
             except FileNotFoundError:
-                print('tar.exe not found.')
+                tprint('tar.exe not found.')
 
 
-def process_option_data(conn_str, sql_server_opt, stk_dfs: dict[str, pl.DataFrame]):
+def process_option_data(conn_str: str, sql_server_opt: dict[str, list[str]], stk_dfs: dict[str, pl.DataFrame]):
     option_dfs: dict[str, pl.DataFrame] = {}
 
-    for database, tables in sql_server_opt.items():
+    ordered_tables = sorted(sql_server_opt.keys(), key=lambda x: datetime.strptime(x.split('_')[2], '%b%y'))
+
+    for database in ordered_tables:
+        tables = sql_server_opt[database]
         t0 = perf_counter_ns()
-        print(f'Requesting data for {database}...')
+        tprint(f'Requesting data for {database}...')
         for i, table in enumerate(tables, start=1):
             try:
                 data = get_option_data(conn_str, database, table)
             except InvalidRequestError as e:
-                print(f'Invalid request error: {e}')
-                print(f'Requested opt data for {database} {table}')
-                print(' - - - ')
+                tprint(f'Invalid request error: {e}')
+                tprint(f'Requested opt data for {database} {table}')
+                tprint(' - - - ')
                 continue
 
             if not data.data:
@@ -251,16 +266,16 @@ def process_option_data(conn_str, sql_server_opt, stk_dfs: dict[str, pl.DataFram
             polars_df = option_data_to_polars(data, stk_dfs[table.split('_')[0]])
 
             if table in option_dfs.keys():
-                print(f'{table} already exists as key.')
+                tprint(f'{table} already exists as key.')
 
             option_dfs[table] = polars_df
             
         if option_dfs.keys():
    
             t1 = perf_counter_ns()
-            print(f'Recieved data for {database} in {((t1-t0)/1e9):.2f} seconds.')
+            tprint(f'Received data for {database} in {((t1-t0)/1e9):.2f} seconds.')
             
-            print(f'Exporting data for {database}...')
+            tprint(f'Exporting data for {database}...')
             data_export_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.EXPORT_DIR)
             if not os.path.exists(data_export_path):
                 os.makedirs(data_export_path)
@@ -268,31 +283,29 @@ def process_option_data(conn_str, sql_server_opt, stk_dfs: dict[str, pl.DataFram
             safe_df_dumps(data_export_path, option_dfs, database)
 
             t2 = perf_counter_ns()
-            print(f'Created export files in {((t2-t1)/1e9):.2f} seconds.')
+            tprint(f'Created export files in {((t2-t1)/1e9):.2f} seconds.')
             
             option_dfs = {} 
             t0 = perf_counter_ns()
 
+
+def tprint(*args):
+
+    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {' '.join(args)}")
+
+
 def controller():
 
-    conn_str = load_credentials()
+    conn_str: str = load_sql_credentials()
 
-    sql_server = get_database_names(conn_str)
-    sql_server = get_table_names(conn_str, sql_server)  
+    sql_server: dict[str, list[None]] = get_database_names(conn_str)
+    sql_server: dict[str, list[str]] = get_table_names(conn_str, sql_server)
 
-    sql_server_stk, sql_server_opt = filter_option_tables(sql_server)
+    fot = filter_option_tables(sql_server)
+    sql_server_stk: dict[str, list[str]] = fot[0]
+    sql_server_opt: dict[str, list[str]] = fot[1]
 
-    """with open('sql_server_stk.json', 'w') as f:
-        json.dump(sql_server_stk, f, indent=4)
-    
-    with open('sql_server_opt.json', 'w') as f:
-        json.dump(sql_server_opt, f, indent=4)
-
-    print('Vars saved.') """
-    stk_dfs = process_stock_data(conn_str, sql_server_stk)
-    
-    print(f'Stk data processed.')
-
+    stk_dfs: dict[str, pl.DataFrame] = process_stock_data(conn_str, sql_server_stk)
 
     process_option_data(conn_str, sql_server_opt, stk_dfs)
     
