@@ -1,10 +1,9 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from dotenv import
+from dotenv
 import json
 import os
-import pickle
 import polars as pl
 import shutil
 from sqlalchemy import create_engine,  String, Float, text
