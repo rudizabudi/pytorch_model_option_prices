@@ -11,3 +11,5 @@ class DataCreationConfig:
     DELETE_PICKLE: bool = False  # only if compress_data is True
 
     SQL_CREDENTIALS_JSON_PATH: str = 'sql_credentials.json'
+
+    XLS_RISK_FREE_RATE_URL: str = 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xmlview?data=daily_treasury_yield_curve&field_tdr_date_value='

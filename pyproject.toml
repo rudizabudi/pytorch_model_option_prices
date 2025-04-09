@@ -5,7 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "numpy>=2.2.4",
     "polars>=1.26.0",
     "pyodbc>=5.2.0",
+    "requests>=2.32.3",
+    "scikit-learn>=1.6.1",
     "sqlalchemy>=2.0.40",
+    "torch>=2.6.0",
+    "xmltodict>=0.14.2",
 ]

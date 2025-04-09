@@ -14,3 +14,14 @@ data/
 backups/
 tester.py
 
+/.idea/material_theme_project_new.xml
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/inspectionProfiles/Project_Default.xml
+/.idea/pytorch_model_option_prices.iml
+/raw_option_data.pkl
+/saved_dataframes.pkl
+/sql_server_opt.json
+/sql_server_stk.json
+/.idea/vcs.xml
