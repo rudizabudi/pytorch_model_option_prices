@@ -4,6 +4,7 @@ from dataclasses import dataclass
 class DataCreationConfig:
 
     HISTORY_ONLY: bool = True  # only use historical data
+    START_DATE: str = '2024-10-01'  # YYYY-MM-DD start date for historical data to process
 
     EXPORT_DIR: str = 'data'  # directory to save the data
     SINGLE_SAVE: bool = True  # save data in a single file

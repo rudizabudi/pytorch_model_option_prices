@@ -7,12 +7,13 @@ import polars as pl
 import shutil
 from sqlalchemy import create_engine, String, Float, text
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
-from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.exc import InvalidRequestError, SAWarning
 from sqlalchemy.ext.declarative import declarative_base
 import subprocess
 import tempfile
 from time import perf_counter_ns, sleep
 from typing import TypeVar
+import warnings
 
 from convert_to_df import option_data_to_polars, stk_data_to_polars
 from config import DataCreationConfig
@@ -28,6 +29,7 @@ if os.getenv('DEV_VAR') == 'rudizabudi':
         logging.basicConfig()
         logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
+warnings.filterwarnings('ignore', category=SAWarning)
 
 OptionTableType = TypeVar('OptionTableType')
 StockTableType = TypeVar('StockTableType')
@@ -147,16 +149,18 @@ def filter_option_tables(sql_server: str) -> (dict[str, list[str]], dict[str, li
 
     tmp_sql_server_stk, tmp_sql_server_opt = defaultdict(list), defaultdict(list)
     if DataCreationConfig.HISTORY_ONLY:
-        cutoff_date = datetime.now() - timedelta(days=5)
-        cutoff_date = cutoff_date.timestamp()
+        cutoff_date_max = datetime.now() - timedelta(days=5)
+        cutoff_date_max = cutoff_date_max.timestamp()
     else:
-        cutoff_date = datetime(2099, 12, 31).timestamp()
+        cutoff_date_max = datetime(2099, 12, 31).timestamp()
+
+    cutoff_date_min = datetime.strptime(DataCreationConfig.START_DATE, '%Y-%m-%d').timestamp()
 
     for database, tables in sql_server.items():
         for table in tables:
             if '_OPT_' in table:
                 date = datetime.strptime(table.split('_')[2], '%d%b%y').timestamp()
-                if date < cutoff_date:
+                if cutoff_date_min <= date <= cutoff_date_max:
                     tmp_sql_server_opt[database].append(table)
             if '_STK' in database:
                 tmp_sql_server_stk[database].append(table)
@@ -250,8 +254,9 @@ def process_option_data(conn_str: str, sql_server_opt: dict[str, list[str]], stk
     for database in ordered_tables:
         tables = sql_server_opt[database]
         t0 = perf_counter_ns()
-        tprint(f'Requesting data for {database}...')
+        tprint(f'Double tables to queue: {set(x for x in tables if tables.count(x) > 1)}' )
         for i, table in enumerate(tables, start=1):
+            t0 = perf_counter_ns()
             try:
                 data = get_option_data(conn_str, database, table)
             except InvalidRequestError as e:
@@ -262,18 +267,25 @@ def process_option_data(conn_str: str, sql_server_opt: dict[str, list[str]], stk
 
             if not data.data:
                 continue
+            t1 = perf_counter_ns()
 
-            polars_df = option_data_to_polars(data, stk_dfs[table.split('_')[0]])
+            tprint(f'Requesting opt data for {table} took {(t1-t0)/ 1e6} ms.')
+
+            polars_df = option_data_to_polars(data, stk_dfs[table.split('_')[0]], table)
 
             if table in option_dfs.keys():
                 tprint(f'{table} already exists as key.')
 
             option_dfs[table] = polars_df
-            
+
+            t2 = perf_counter_ns()
+            tprint(f'Creating table for {table} took {(t2 - t1) / 1e6} ms.')
+            tprint(' - - - ')
+
         if option_dfs.keys():
    
             t1 = perf_counter_ns()
-            tprint(f'Received data for {database} in {((t1-t0)/1e9):.2f} seconds.')
+            tprint(f'Received whole data for {database} in {((t1-t0)/1e9):.2f} seconds.')
             
             tprint(f'Exporting data for {database}...')
             data_export_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.EXPORT_DIR)
@@ -286,7 +298,6 @@ def process_option_data(conn_str: str, sql_server_opt: dict[str, list[str]], stk
             tprint(f'Created export files in {((t2-t1)/1e9):.2f} seconds.')
             
             option_dfs = {} 
-            t0 = perf_counter_ns()
 
 
 def tprint(*args):
@@ -295,7 +306,6 @@ def tprint(*args):
 
 
 def controller():
-
     conn_str: str = load_sql_credentials()
 
     sql_server: dict[str, list[None]] = get_database_names(conn_str)
