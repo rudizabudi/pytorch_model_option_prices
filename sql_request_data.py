@@ -165,8 +165,20 @@ def filter_option_tables(sql_server: str) -> (dict[str, list[str]], dict[str, li
             if '_STK' in database:
                 tmp_sql_server_stk[database].append(table)
     
-    return tmp_sql_server_stk, tmp_sql_server_opt
+    for database in tmp_sql_server_opt.keys():
+        tmp_list = []
+        for table in tmp_sql_server_opt[database]:
+            tmp_list.append({'query_db': database, 'table': table})
+        tmp_sql_server_opt[database] = tmp_list
 
+    opt_data_keys = list(tmp_sql_server_opt.keys())
+    for i, lk in enumerate(opt_data_keys):
+        to_add = [k for k in opt_data_keys[i + 1:] if lk.split('_')[2] == k.split('_')[2]]
+        for add_key in to_add:
+            tmp_sql_server_opt[lk].extend(tmp_sql_server_opt[add_key])
+            tmp_sql_server_opt.pop(add_key)
+    
+    return tmp_sql_server_stk, tmp_sql_server_opt
 
 def load_sql_credentials() -> str:
     credentials_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.SQL_CREDENTIALS_JSON_PATH)
@@ -246,46 +258,49 @@ def safe_df_dumps(data_export_path: str, option_dfs: dict[str, pl.DataFrame], da
                 tprint('tar.exe not found.')
 
 
-def process_option_data(conn_str: str, sql_server_opt: dict[str, list[str]], stk_dfs: dict[str, pl.DataFrame]):
+def process_option_data(conn_str: str, sql_server_opt: dict[str, list[dict[str, str]]], stk_dfs: dict[str, pl.DataFrame]):
     option_dfs: dict[str, pl.DataFrame] = {}
 
     ordered_tables = sorted(sql_server_opt.keys(), key=lambda x: datetime.strptime(x.split('_')[2], '%b%y'))
 
     for database in ordered_tables:
         tables = sql_server_opt[database]
+
         t0 = perf_counter_ns()
-        tprint(f'Double tables to queue: {set(x for x in tables if tables.count(x) > 1)}' )
-        for i, table in enumerate(tables, start=1):
-            t0 = perf_counter_ns()
+        for i, query_data in enumerate(tables, start=1):
+            query_table = query_data['table']
+            query_db = query_data['query_db']
+
+            t1 = perf_counter_ns()
             try:
-                data = get_option_data(conn_str, database, table)
+                data = get_option_data(conn_str, query_db, query_table)
             except InvalidRequestError as e:
                 tprint(f'Invalid request error: {e}')
-                tprint(f'Requested opt data for {database} {table}')
+                tprint(f'Requested opt data for {query_db} {query_table}')
                 tprint(' - - - ')
                 continue
 
             if not data.data:
                 continue
-            t1 = perf_counter_ns()
-
-            tprint(f'Requesting opt data for {table} took {(t1-t0)/ 1e6} ms.')
-
-            polars_df = option_data_to_polars(data, stk_dfs[table.split('_')[0]], table)
-
-            if table in option_dfs.keys():
-                tprint(f'{table} already exists as key.')
-
-            option_dfs[table] = polars_df
 
             t2 = perf_counter_ns()
-            tprint(f'Creating table for {table} took {(t2 - t1) / 1e6} ms.')
+
+            tprint(f' {i:^5}/{len(tables):^8} | {(i / len(tables)) * 100:.2f}% for {database}.')
+            tprint(f'Requesting opt data for {query_table} took {(t2-t1) / 1e6:.0f} ms.')
+
+            polars_df = option_data_to_polars(data, stk_dfs[query_table.split('_')[0]], query_table)
+
+            if query_table in option_dfs.keys():
+                tprint(f'{query_table} already exists as key.')
+
+            option_dfs[query_table] = polars_df
+
+            t3 = perf_counter_ns()
+            tprint(f'Creating table for {query_table} took {(t3 - t2) / 1e6:.0f} ms.')
             tprint(' - - - ')
 
         if option_dfs.keys():
-   
-            t1 = perf_counter_ns()
-            tprint(f'Received whole data for {database} in {((t1-t0)/1e9):.2f} seconds.')
+            tprint(f'Received whole data for {database} in {((t3-t0)/1e9):.2f} seconds.')
             
             tprint(f'Exporting data for {database}...')
             data_export_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.EXPORT_DIR)
@@ -294,8 +309,8 @@ def process_option_data(conn_str: str, sql_server_opt: dict[str, list[str]], stk
 
             safe_df_dumps(data_export_path, option_dfs, database)
 
-            t2 = perf_counter_ns()
-            tprint(f'Created export files in {((t2-t1)/1e9):.2f} seconds.')
+            t3 = perf_counter_ns()
+            tprint(f'Created export files in {((t3-t2)/1e9):.2f} seconds.')
             
             option_dfs = {} 
 
