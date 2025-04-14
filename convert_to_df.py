@@ -26,7 +26,7 @@ class StockData:
 
 class RiskFreeRates:
     imported_rates: dict[int, dict] = {}
-    rate_table: dict[date, defaultdict[int, float]] = defaultdict(dict)
+    rate_table: defaultdict[date, dict[int, float]] = defaultdict(dict)
 
     @classmethod
     def load_raw_risk_free_rates(cls, year: int) -> None:
@@ -54,6 +54,9 @@ class RiskFreeRates:
 
     @classmethod
     def calculate_rate(cls, timestamp_date: date, expiry_date: date) -> float:
+        if not isinstance(timestamp_date, date) or not isinstance(expiry_date, date):
+            raise TypeError(f'timestamp_date {isinstance(timestamp_date, date)} and expiry_date {isinstance(expiry_date, date)} must be of type date')
+
         day_range = (expiry_date - timestamp_date).days
 
         next_smaller = max(filter(lambda x: x <= max(day_range, min(cls.rate_table[timestamp_date].keys())), cls.rate_table[timestamp_date].keys()))
@@ -112,23 +115,25 @@ def opt_fill_missing_rows(df: pl.DataFrame, expiry_date: datetime) -> pl.DataFra
         .then(pl.col('identifier').str.extract(r"([CcPp])", group_index=0).str.to_uppercase())
         .otherwise(pl.col('callput'))
         .alias('callput'),
+
+        pl.col('date').dt.date().alias('date_as_date')
     ])
 
-    unique_dates_df = filled_df.select(pl.col('date').dt.date().alias('date')).unique()
     expiry_date = expiry_date.date()
-
+    unique_dates_df = filled_df.select('date_as_date').unique()
     unique_dates_df = unique_dates_df.with_columns([
-            pl.col('date').map_elements(lambda timestamp_date: RiskFreeRates.get_rate_at_date(timestamp_date, expiry_date),
-                                        return_dtype=pl.Float64)
+            pl.col('date_as_date').map_elements(lambda timestamp_date: RiskFreeRates.get_rate_at_date(timestamp_date, expiry_date),
+                                                return_dtype=pl.Float64)
             .alias('risk_free_rate')
-        ])
+    ])
 
-    filled_df = filled_df.join(
-        unique_dates_df,
-        left_on=pl.col('date').dt.date(),
-        right_on='date',
-        how='left'
+    filled_df = filled_df.join( unique_dates_df,
+                                left_on=pl.col('date').dt.date(),
+                                right_on='date_as_date',
+                                how='left'
     )
+
+    filled_df = filled_df.drop('date_as_date')
 
     return filled_df
 
