@@ -4,14 +4,12 @@ from datetime import datetime, timedelta
 import json
 import os
 import polars as pl
-import shutil
+from pyarrow import ipc,OSFile
 from sqlalchemy import create_engine, String, Float, text
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
 from sqlalchemy.exc import InvalidRequestError, SAWarning
 from sqlalchemy.ext.declarative import declarative_base
-import subprocess
-import tempfile
-from time import perf_counter_ns, sleep
+from time import perf_counter_ns
 from typing import TypeVar
 import warnings
 
@@ -91,11 +89,11 @@ def get_option_data(connection_string: str, database_name: str, table_name: str)
 
     connection_string += database_name
     engine = create_engine(connection_string)
-    #Base.metadata.create_all(engine)
+    # Base.metadata.create_all(engine)
 
     with sessionmaker(bind=engine)() as session:
-        OptionQuery = build_OptionTable(table_name)
-        data = session.query(OptionQuery).all()
+        option_query = build_OptionTable(table_name)
+        data = session.query(option_query).all()
 
     od: OptionData = OptionData(identifier=table_name, data=data)
     return od
@@ -105,10 +103,10 @@ def get_stock_data(connection_string: str, database_name: str, table_name: str) 
 
     connection_string += database_name
     engine = create_engine(connection_string)
-    #Base.metadata.create_all(engine)
+    # Base.metadata.create_all(engine)
     with sessionmaker(bind=engine)() as session:
-        StockQuery = build_StockTable(table_name)
-        data = session.query(StockQuery).all()
+        stock_query = build_StockTable(table_name)
+        data = session.query(stock_query).all()
 
     sd: StockData = StockData(identifier=table_name, data=data)
     return sd
@@ -131,7 +129,7 @@ def get_database_names(connection_string: str) -> dict[str, list[None]]:
     return sql_server
 
 
-def get_table_names(connection_string: str, sql_server: str) -> dict[str, list[str]]:
+def get_table_names(connection_string: str, sql_server: dict[str, list[None]]) -> dict[str, list[None | str]]:
     
     for database in sql_server.keys():
         tmp_con_str = connection_string + database
@@ -145,7 +143,7 @@ def get_table_names(connection_string: str, sql_server: str) -> dict[str, list[s
     return sql_server
 
 
-def filter_option_tables(sql_server: str) -> (dict[str, list[str]], dict[str, list[str]]):
+def filter_option_tables(sql_server: dict[str, list[str]]) -> (dict[str, list[str]], dict[str, list[str]]):
 
     tmp_sql_server_stk, tmp_sql_server_opt = defaultdict(list), defaultdict(list)
     if DataCreationConfig.HISTORY_ONLY:
@@ -179,6 +177,7 @@ def filter_option_tables(sql_server: str) -> (dict[str, list[str]], dict[str, li
             tmp_sql_server_opt.pop(add_key)
     
     return tmp_sql_server_stk, tmp_sql_server_opt
+
 
 def load_sql_credentials() -> str:
     credentials_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.SQL_CREDENTIALS_JSON_PATH)
@@ -218,44 +217,21 @@ def process_stock_data(conn_str: str, sql_server_stk: dict[str, list[str]]):
     return stk_dfs
 
 
-def safe_df_dumps(data_export_path: str, option_dfs: dict[str, pl.DataFrame], database: str) -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        arrow_files = []
+def write_df_to_file(polars_df: pl.DataFrame, database: str, table: str) -> None:
 
-        for table, df in option_dfs.items():
-            filename = f'{table}.arrow'
-            filepath = os.path.join(tmpdir, filename)
-            df.write_ipc(filepath)
-            arrow_files.append(filename)
-            
-        if DataCreationConfig.SINGLE_SAVE:
-            single_save_dir = os.path.join(data_export_path, database)
-            if not os.path.exists(single_save_dir):
-                os.mkdir(single_save_dir)
+    output_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.EXPORT_DIR, database)
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
 
-            for item in arrow_files:
-                s = os.path.join(tmpdir, item)
-                d = os.path.join(single_save_dir, item)
-                if os.path.isfile(s):
-                    shutil.copy2(s, d)
-        
-        if DataCreationConfig.MULTI_SAVE:
-            output_path = os.path.join(data_export_path, f'{database}.tar.xz')
+    file_path = os.path.join(output_path, f'{table}.arrow')
+    with OSFile(file_path, mode='wb') as file:
+        with ipc.new_file(sink=file, schema=polars_df.to_arrow().schema, options=ipc.IpcWriteOptions(compression="zstd")) as writer:
+            writer.write_table(polars_df.to_arrow())
 
-            try:
-                command = [
-                    'tar.exe',
-                    '-cJf',
-                    output_path,
-                    *arrow_files
-                ]
-                subprocess.run(command, check=True, cwd=tmpdir)
-                tprint(f'Successfully compressed {len(option_dfs)} DataFrames to {output_path}')
-
-            except subprocess.CalledProcessError as e:
-                tprint(f'Error during tar execution: {e}')
-            except FileNotFoundError:
-                tprint('tar.exe not found.')
+    # To read the file back
+    # with memory_map(file_path, 'r') as file:
+    #     df = ipc.RecordBatchFileReader(file).read_all()
+    #     df = pl.from_arrow(df)
 
 
 def process_option_data(conn_str: str, sql_server_opt: dict[str, list[dict[str, str]]], stk_dfs: dict[str, pl.DataFrame]):
@@ -293,34 +269,23 @@ def process_option_data(conn_str: str, sql_server_opt: dict[str, list[dict[str, 
             if query_table in option_dfs.keys():
                 tprint(f'{query_table} already exists as key.')
 
-            option_dfs[query_table] = polars_df
-
             t3 = perf_counter_ns()
             tprint(f'Creating table for {query_table} took {(t3 - t2) / 1e6:.0f} ms.')
+
+            write_df_to_file(polars_df, database, query_table)
+            t4 = perf_counter_ns()
+            tprint(f'Writing table to file took {(t4 - t3) / 1e6:.0f} ms.')
             tprint(' - - - ')
 
-        if option_dfs.keys():
-            tprint(f'Received whole data for {database} in {((t3-t0)/1e9):.2f} seconds.')
-            
-            tprint(f'Exporting data for {database}...')
-            data_export_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.EXPORT_DIR)
-            if not os.path.exists(data_export_path):
-                os.makedirs(data_export_path)
-
-            safe_df_dumps(data_export_path, option_dfs, database)
-
-            t3 = perf_counter_ns()
-            tprint(f'Created export files in {((t3-t2)/1e9):.2f} seconds.')
-            
-            option_dfs = {} 
+        tprint(f'Received whole data for {database} in {((t4 - t0) / 1e9):.2f} seconds.')
 
 
 def tprint(*args):
-
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} : {' '.join(args)}")
 
 
 def controller():
+    tprint('Started!')
     conn_str: str = load_sql_credentials()
 
     sql_server: dict[str, list[None]] = get_database_names(conn_str)
