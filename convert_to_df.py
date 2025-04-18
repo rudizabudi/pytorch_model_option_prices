@@ -1,10 +1,9 @@
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 import polars as pl
 import requests
-from time import perf_counter_ns
+from time import perf_counter_ns, sleep
 from typing import TypeVar
 import xmltodict
 
@@ -96,15 +95,17 @@ def opt_create_proto_df(option_data: OptionData) -> pl.DataFrame:
     return pl.DataFrame(data_list)
 
 
-def opt_fill_missing_rows(df: pl.DataFrame, expiry_date: datetime) -> pl.DataFrame:
+def transform_to_training_data(df: pl.DataFrame, expiry_date: datetime, underlying_prices: pl.DataFrame) -> pl.DataFrame:
 
     dates = df.select('date').unique()
+
     identifiers = df.select('identifier').unique()
 
     full_index = dates.join(identifiers, how='cross')
 
     filled_df = full_index.join(df, on=['date', 'identifier'], how='left')
 
+    # print(f"1null values: {filled_df.select(pl.col('strike').is_null().sum()).item()}")
     filled_df = filled_df.with_columns([
         pl.when(pl.col('strike').is_null())
         .then(pl.col('identifier').str.extract(r"(\d+\.\d+)", group_index=0).cast(pl.Float64()))
@@ -133,14 +134,15 @@ def opt_fill_missing_rows(df: pl.DataFrame, expiry_date: datetime) -> pl.DataFra
                                 how='left'
     )
 
-    filled_df = filled_df.drop('date_as_date')
+    filled_df = filled_df.drop(('date_as_date', 'date_as_date_right'))
+
+
 
     return filled_df
 
 
 def opt_underlying_merge(df: pl.DataFrame, underlying_prices: pl.DataFrame):
-    underlying_prices.rename({'h': 'ul_h', 'l': 'ul_l', 'o': 'ul_o', 'c': 'ul_c'})
-
+    underlying_prices = underlying_prices.rename({'h': 'ul_h', 'l': 'ul_l', 'o': 'ul_o', 'c': 'ul_c'})
     df = df.join(underlying_prices, on=['date'], how='left')
     return df
 
@@ -161,8 +163,11 @@ def stk_create_df(stock_data: StockData) -> pl.DataFrame:
 def option_data_to_polars(option_data: OptionData, underlying_prices: pl.DataFrame, table: str):
     proto_df = opt_create_proto_df(option_data)
 
+    if DataCreationConfig.OUTPUT_TYPE == 'BACKUP':
+        return proto_df
+
     expiry_date = datetime.strptime(table.split('_')[2], '%d%b%y')
-    filled_df = opt_fill_missing_rows(proto_df, expiry_date)
+    filled_df = transform_to_training_data(proto_df, expiry_date, underlying_prices)
 
     merged_df = opt_underlying_merge(filled_df, underlying_prices)
 
