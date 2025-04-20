@@ -117,7 +117,8 @@ def transform_to_training_data(df: pl.DataFrame, expiry_date: datetime, underlyi
         .otherwise(pl.col('callput'))
         .alias('callput'),
 
-        pl.col('date').dt.date().alias('date_as_date')
+        pl.col('date').dt.date()
+        .alias('date_as_date')
     ])
 
     expiry_date = expiry_date.date()
@@ -134,9 +135,12 @@ def transform_to_training_data(df: pl.DataFrame, expiry_date: datetime, underlyi
                                 how='left'
     )
 
+    filled_df = filled_df.with_columns(
+        ((expiry_date - pl.col('date')).cast(pl.Float64) / (1_000_000 * 60 * 60 * 24))
+        .alias('time_to_expiry_days')
+    )
+
     filled_df = filled_df.drop(('date_as_date', 'date_as_date_right'))
-
-
 
     return filled_df
 

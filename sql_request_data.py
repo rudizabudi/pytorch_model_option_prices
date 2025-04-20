@@ -4,20 +4,18 @@ from datetime import datetime, timedelta
 import json
 import os
 import polars as pl
-from pyarrow import ipc,OSFile
+from pyarrow import ipc, OSFile
 from sqlalchemy import create_engine, String, Float, text
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
 from sqlalchemy.exc import InvalidRequestError, SAWarning
 from sqlalchemy.ext.declarative import declarative_base
 from time import perf_counter_ns
-from typing import TypeVar
 import warnings
 
 from convert_to_df import option_data_to_polars, stk_data_to_polars
 from config import DataCreationConfig
 
 if os.getenv('DEV_VAR') == 'rudizabudi':
-    DEV_MODE = True
     DataCreationConfig.SQL_CREDENTIALS_JSON_PATH = 'sql_credentials_dev.json'
 
     LOGGING = False
@@ -29,8 +27,8 @@ if os.getenv('DEV_VAR') == 'rudizabudi':
 
 warnings.filterwarnings('ignore', category=SAWarning)
 
-OptionTableType = TypeVar('OptionTableType')
-StockTableType = TypeVar('StockTableType')
+type OptionTableType = 'OptionTableType'
+type StockTableType = 'StockTableType'
 
 Base = declarative_base()
 
@@ -67,7 +65,7 @@ def build_StockTable(table_name: str) -> StockTableType:
         c: Mapped[float] = mapped_column(Float)
 
         def __repr__(self):
-            return (f'<StockTable(date={self.date}, h={self.h}, '
+            return (f'<StockTable(date={self.date}, h={self.h},'
                     f'l={self.l}, o={self.o}, c={self.c})>')
     
     return StockTable
@@ -96,6 +94,7 @@ def get_option_data(connection_string: str, database_name: str, table_name: str)
         data = session.query(option_query).all()
 
     od: OptionData = OptionData(identifier=table_name, data=data)
+
     return od
 
 
@@ -109,6 +108,7 @@ def get_stock_data(connection_string: str, database_name: str, table_name: str) 
         data = session.query(stock_query).all()
 
     sd: StockData = StockData(identifier=table_name, data=data)
+
     return sd
 
     
@@ -143,7 +143,7 @@ def get_table_names(connection_string: str, sql_server: dict[str, list[None]]) -
     return sql_server
 
 
-def filter_option_tables(sql_server: dict[str, list[str]]) -> (dict[str, list[str]], dict[str, list[str]]):
+def filter_option_tables(sql_server: dict[str, list[str]]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
 
     tmp_sql_server_stk, tmp_sql_server_opt = defaultdict(list), defaultdict(list)
     if DataCreationConfig.HISTORY_ONLY:
@@ -192,7 +192,7 @@ def load_sql_credentials() -> str:
     return conn_str
 
 
-def process_stock_data(conn_str: str, sql_server_stk: dict[str, list[str]]):
+def process_stock_data(conn_str: str, sql_server_stk: dict[str, list[str]]) -> dict[str, pl.DataFrame]:
     stk_dfs = {}
 
     database = 'Data_STK'
@@ -219,7 +219,9 @@ def process_stock_data(conn_str: str, sql_server_stk: dict[str, list[str]]):
 
 def write_df_to_file(polars_df: pl.DataFrame, database: str, table: str) -> None:
 
-    output_path = os.path.join(os.path.dirname(__file__), DataCreationConfig.EXPORT_DIR, database)
+    subfolder = DataCreationConfig.TRAINING_EXPORT_DIR if DataCreationConfig.OUTPUT_TYPE == 'TRAINING' else DataCreationConfig.BACKUP_EXPORT_DIR
+
+    output_path = os.path.join(os.path.dirname(__file__), subfolder, database)
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 
@@ -235,7 +237,6 @@ def write_df_to_file(polars_df: pl.DataFrame, database: str, table: str) -> None
 
 
 def process_option_data(conn_str: str, sql_server_opt: dict[str, list[dict[str, str]]], stk_dfs: dict[str, pl.DataFrame]):
-    option_dfs: dict[str, pl.DataFrame] = {}
 
     ordered_tables = sorted(sql_server_opt.keys(), key=lambda x: datetime.strptime(x.split('_')[2], '%b%y'))
 
@@ -266,15 +267,12 @@ def process_option_data(conn_str: str, sql_server_opt: dict[str, list[dict[str, 
 
             polars_df = option_data_to_polars(data, stk_dfs[query_table.split('_')[0]], query_table)
 
-            if query_table in option_dfs.keys():
-                tprint(f'{query_table} already exists as key.')
-
             t3 = perf_counter_ns()
-            tprint(f'Creating table for {query_table} took {(t3 - t2) / 1e6:.0f} ms.')
+            tprint(f'Creating dataframe for {query_table} took {(t3 - t2) / 1e6:.0f} ms.')
 
             write_df_to_file(polars_df, database, query_table)
             t4 = perf_counter_ns()
-            tprint(f'Writing table to file took {(t4 - t3) / 1e6:.0f} ms.')
+            tprint(f'Writing dataframe to file took {(t4 - t3) / 1e6:.0f} ms.')
             tprint(' - - - ')
 
         tprint(f'Received whole data for {database} in {((t4 - t0) / 1e9):.2f} seconds.')
@@ -285,7 +283,7 @@ def tprint(*args):
 
 
 def controller():
-    tprint('Started!')
+    tprint(f'Started in mode {DataCreationConfig.OUTPUT_TYPE}.')
     conn_str: str = load_sql_credentials()
 
     sql_server: dict[str, list[None]] = get_database_names(conn_str)
