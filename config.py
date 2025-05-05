@@ -14,12 +14,15 @@ class DataCreationConfig:
 
     HISTORY_ONLY: bool = True  # only use historical data
     START_DATE: str = '2024-08-01'  # YYYY-MM-DD start date for historical data to process
+    REFRESH_DATA: bool = True  # only process data for tables that dont already exist
 
     SQL_CREDENTIALS_JSON_PATH: str = 'sql_credentials.json'
 
     XLS_RISK_FREE_RATE_URL: str = 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xmlview?data=daily_treasury_yield_curve&field_tdr_date_value='
 
     TRAIN_IGNORE_FOLDERS: str = 'Vergleich'  # comma separated
+
+    FMP_API_KEY: str = 'rbfZHTUCSk52aCXELDmES40UraSXKgJL'  # financialmodelingprep API Key
 
 
 @dataclass
