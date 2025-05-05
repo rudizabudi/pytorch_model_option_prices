@@ -34,11 +34,11 @@ class OptionPricePredictor(nn.Module):
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(hidden_size, output_size)
 
-    # def forward(self, x: torch.Tensor) -> torch.Tensor:
-    #     x = self.fc1(x)
-    #     x = self.relu(x)
-    #     x = self.fc2(x)
-    #     return x
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
 
 
 def prepare_data(df: pl.DataFrame, features: tuple[str], target: tuple[str]) -> tuple[DataLoader[Any], DataLoader[Any]]:
@@ -100,7 +100,7 @@ def train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoad
 
         avg_train_loss = train_loss / len(train_loader.dataset)
         avg_val_loss = val_loss / len(val_loader.dataset)
-        tprint(f'Epoch {epoch+1}/{TrainingConfig.TRAINING_EPOCHS}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
+        tprint(f'Epoch {epoch + 1}/{TrainingConfig.TRAINING_EPOCHS}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
 
 
 def get_all_tables_paths(dir_path: str) -> list[str]:
