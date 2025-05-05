@@ -12,10 +12,12 @@ from config import DataCreationConfig
 OptionTableType = TypeVar('OptionTableType')
 StockTableType = TypeVar('StockTableType')
 
+
 @dataclass
 class OptionData:
     identifier: str
     data: list[OptionTableType]
+
 
 @dataclass
 class StockData:
@@ -79,6 +81,30 @@ class RiskFreeRates:
         return cls.calculate_rate(timestamp_date, expiry_date)
 
 
+class DividendDates:
+    div_date_data: defaultdict[str, dict[str, datetime | float]] = defaultdict(dict)
+
+    @classmethod
+    def request_div_dates(cls, symbol):
+        url = f'https://financialmodelingprep.com/api/v3/historical-price-full/stock_dividend/{symbol}?apikey={DataCreationConfig.FMP_API_KEY}'
+        r = requests.get(url)
+        data = r.json()
+        data = [{k: v for k, v in x.items() if k in ('date', 'dividend')} for x in data['historical']]
+
+        for event in data:
+            event['date'] = datetime.strptime(event['date'], '%Y-%m-%d')
+            event['dividend'] = float(event['dividend'])
+
+        cls.div_date_data[symbol] = data
+
+    @classmethod
+    def get_divs(cls, symbol):
+        if symbol not in cls.div_date_data.keys():
+            cls.request_div_dates(symbol)
+
+        return cls.div_date_data[symbol]
+
+
 def opt_create_proto_df(option_data: OptionData) -> pl.DataFrame:
     data_list = []
     for row in option_data.data:
@@ -95,7 +121,7 @@ def opt_create_proto_df(option_data: OptionData) -> pl.DataFrame:
     return pl.DataFrame(data_list)
 
 
-def transform_to_training_data(df: pl.DataFrame, expiry_date: datetime, underlying_prices: pl.DataFrame) -> pl.DataFrame:
+def transform_to_training_data(df: pl.DataFrame, expiry_date: datetime, symbol: str, underlying_prices: pl.DataFrame) -> pl.DataFrame:
 
     dates = df.select('date').unique()
 
@@ -129,15 +155,33 @@ def transform_to_training_data(df: pl.DataFrame, expiry_date: datetime, underlyi
             .alias('risk_free_rate')
     ])
 
-    filled_df = filled_df.join( unique_dates_df,
-                                left_on=pl.col('date').dt.date(),
-                                right_on='date_as_date',
-                                how='left'
-    )
+    filled_df = filled_df.join(unique_dates_df, left_on=pl.col('date').dt.date(), right_on='date_as_date', how='left')
 
     filled_df = filled_df.with_columns(
         ((expiry_date - pl.col('date')).cast(pl.Float64) / (1_000_000 * 60 * 60 * 24))
         .alias('time_to_expiry_days')
+    )
+
+    div_df = pl.DataFrame(DividendDates.get_divs(symbol))
+    div_df = div_df.with_columns([pl.col('date').dt.date().alias('date_date')])
+    div_df = div_df.drop('date')
+
+    tmp_df = filled_df.sort(['identifier', 'date'])
+    tmp_df = tmp_df.with_columns([
+        pl.col('date').dt.date().alias('date_date')]
+    )
+
+    tmp_df = pl.DataFrame(tmp_df.sort('date').group_by('date_date').first()['date'])
+    tmp_df = tmp_df.with_columns([
+        pl.col('date').dt.date().alias('date_date')]
+    )
+
+    tmp_df = tmp_df.join(div_df, left_on="date_date", right_on="date_date", how="left")
+    tmp_df = tmp_df.drop('date_date')
+
+    filled_df = filled_df.join(tmp_df, left_on='date', right_on='date', how='left')
+    filled_df = filled_df.with_columns([
+        pl.col('dividend').fill_null(0).alias('dividend')]
     )
 
     filled_df = filled_df.drop(('date_as_date', 'date_as_date_right'))
@@ -170,8 +214,9 @@ def option_data_to_polars(option_data: OptionData, underlying_prices: pl.DataFra
     if DataCreationConfig.OUTPUT_TYPE == 'BACKUP':
         return proto_df
 
+    symbol = table.split('_')[0]
     expiry_date = datetime.strptime(table.split('_')[2], '%d%b%y')
-    filled_df = transform_to_training_data(proto_df, expiry_date, underlying_prices)
+    filled_df = transform_to_training_data(proto_df, expiry_date, symbol, underlying_prices)
 
     merged_df = opt_underlying_merge(filled_df, underlying_prices)
 
