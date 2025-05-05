@@ -162,20 +162,32 @@ def filter_option_tables(sql_server: dict[str, list[str]]) -> tuple[dict[str, li
                     tmp_sql_server_opt[database].append(table)
             if '_STK' in database:
                 tmp_sql_server_stk[database].append(table)
-    
+
+    existing_tables = []
+    if DataCreationConfig.REFRESH_DATA:
+        subfolder = DataCreationConfig.TRAINING_EXPORT_DIR if DataCreationConfig.OUTPUT_TYPE == 'TRAINING' else DataCreationConfig.BACKUP_EXPORT_DIR
+
+        for root, _, files in os.walk(subfolder):
+            for file in files:
+                if file.endswith('.arrow'):
+                    if not any(map(lambda x: x in root, DataCreationConfig.TRAIN_IGNORE_FOLDERS.split(','))):
+                        existing_tables.append(file.rstrip('.arrow'))
+
     for database in tmp_sql_server_opt.keys():
         tmp_list = []
         for table in tmp_sql_server_opt[database]:
-            tmp_list.append({'query_db': database, 'table': table})
+            if table not in existing_tables:
+                tmp_list.append({'query_db': database, 'table': table})
         tmp_sql_server_opt[database] = tmp_list
 
+    # Handles split months eg Jan25 and Jan25_1
     opt_data_keys = list(tmp_sql_server_opt.keys())
     for i, lk in enumerate(opt_data_keys):
         to_add = [k for k in opt_data_keys[i + 1:] if lk.split('_')[2] == k.split('_')[2]]
         for add_key in to_add:
             tmp_sql_server_opt[lk].extend(tmp_sql_server_opt[add_key])
             tmp_sql_server_opt.pop(add_key)
-    
+
     return tmp_sql_server_stk, tmp_sql_server_opt
 
 
@@ -275,7 +287,8 @@ def process_option_data(conn_str: str, sql_server_opt: dict[str, list[dict[str, 
             tprint(f'Writing dataframe to file took {(t4 - t3) / 1e6:.0f} ms.')
             tprint(' - - - ')
 
-        tprint(f'Received whole data for {database} in {((t4 - t0) / 1e9):.2f} seconds.')
+        if 't4' in locals():
+            tprint(f'Received whole data for {database} in {((t4 - t0) / 1e9):.2f} seconds.')
 
 
 def tprint(*args):
