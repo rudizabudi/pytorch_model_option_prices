@@ -127,7 +127,7 @@ class TrainingDevice:
     TRAINING_Device: torch.device
 
 
-if __name__ == "__main__":
+def startup():
     table_paths: list[str] = get_all_tables_paths(TrainingConfig.TRAINING_DATA_PATH)
 
     features: tuple[str] = TrainingConfig.FEATURES
