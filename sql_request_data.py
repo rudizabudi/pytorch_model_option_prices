@@ -146,8 +146,18 @@ def get_table_names(connection_string: str, sql_server: dict[str, list[None]]) -
 def filter_option_tables(sql_server: dict[str, list[str]]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
 
     tmp_sql_server_stk, tmp_sql_server_opt = defaultdict(list), defaultdict(list)
+    cutoff_weekdays = DataCreationConfig.END_DATE_WEEKDAYS
+
     if DataCreationConfig.HISTORY_ONLY:
-        cutoff_date_max = datetime.now() - timedelta(days=5)
+        cutoff_date_max = datetime.now()
+
+        while True:
+            cutoff_date_max -= timedelta(days=1)
+            if cutoff_date_max.weekday() not in (5, 6):
+                cutoff_weekdays -= 1
+            if cutoff_weekdays == 0:
+                break
+
         cutoff_date_max = cutoff_date_max.timestamp()
     else:
         cutoff_date_max = datetime(2099, 12, 31).timestamp()
